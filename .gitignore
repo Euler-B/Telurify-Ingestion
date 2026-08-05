@@ -1,0 +1,19 @@
+# Local environment files and secrets
+/.env
+/.env.*
+!/.env.example
+
+# Go build artifacts
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# IDE and OS files
+.DS_Store
+.idea/
+.vscode/
