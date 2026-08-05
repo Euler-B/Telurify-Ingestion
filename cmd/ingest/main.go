@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -35,33 +36,34 @@ func main() {
 	}
 
 	var newRecords, duplicateRecords, invalidRecords int
+	progress := newProgress(len(feed.Features))
 
-	for _, feature := range feed.Features {
+	for processed, feature := range feed.Features {
 		props := feature.Properties
 		coords := feature.Geometry.Coordinates
 
 		if props.Mag == nil || *props.Mag < minMagnitude || *props.Mag > maxMagnitude {
 			invalidRecords++
-			log.Printf("Registro inválido (magnitud): %s", safeLogValue(props.Title))
+			progress.update(processed+1, newRecords, duplicateRecords, invalidRecords)
 			continue
 		}
 
 		exists, err := db.ExistsByTitle(ctx, props.Title)
 		if err != nil {
-			log.Printf("Error verificando duplicado para %q", safeLogValue(props.Title))
 			duplicateRecords++
+			progress.update(processed+1, newRecords, duplicateRecords, invalidRecords)
 			continue
 		}
 
 		if exists {
 			duplicateRecords++
-			log.Printf("Registro duplicado: %s", safeLogValue(props.Title))
+			progress.update(processed+1, newRecords, duplicateRecords, invalidRecords)
 			continue
 		}
 
 		if len(coords) < 2 {
 			invalidRecords++
-			log.Printf("Registro inválido (coordenadas): %s", safeLogValue(props.Title))
+			progress.update(processed+1, newRecords, duplicateRecords, invalidRecords)
 			continue
 		}
 
@@ -79,12 +81,14 @@ func main() {
 
 		if err := db.Insert(ctx, record); err != nil {
 			duplicateRecords++
-			log.Printf("Error al guardar el registro %q", safeLogValue(props.Title))
+			progress.update(processed+1, newRecords, duplicateRecords, invalidRecords)
 			continue
 		}
 
 		newRecords++
+		progress.update(processed+1, newRecords, duplicateRecords, invalidRecords)
 	}
+	progress.finish()
 
 	log.Printf("Nuevos registros guardados: %d", newRecords)
 	log.Printf("Registros duplicados omitidos: %d", duplicateRecords)
@@ -92,10 +96,42 @@ func main() {
 	log.Printf("Datos de los sismos obtenido, validados, y persistidos")
 }
 
-func safeLogValue(value string) string {
-	value = strings.NewReplacer("\r", "\\r", "\n", "\\n").Replace(value)
-	if len(value) > 200 {
-		return value[:200] + "..."
+type progressBar struct {
+	total       int
+	interactive bool
+}
+
+func newProgress(total int) progressBar {
+	info, err := os.Stdout.Stat()
+	return progressBar{
+		total:       total,
+		interactive: err == nil && info.Mode()&os.ModeCharDevice != 0,
 	}
-	return value
+}
+
+func (p progressBar) update(processed, newRecords, duplicateRecords, invalidRecords int) {
+	if !p.interactive || p.total == 0 {
+		return
+	}
+
+	const width = 30
+	completed := width * processed / p.total
+	remaining := width - completed
+	percent := 100 * processed / p.total
+	fmt.Printf("\r[%s%s] %3d%% %d/%d | nuevos: %d | duplicados: %d | inválidos: %d",
+		strings.Repeat("#", completed),
+		strings.Repeat("-", remaining),
+		percent,
+		processed,
+		p.total,
+		newRecords,
+		duplicateRecords,
+		invalidRecords,
+	)
+}
+
+func (p progressBar) finish() {
+	if p.interactive {
+		fmt.Println("\r\033[2K")
+	}
 }
