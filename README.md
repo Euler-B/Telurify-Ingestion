@@ -9,13 +9,27 @@ existing Rails rake task and writes directly to the `sismos` table used by
 Go does not run database migrations. Configure `DATABASE_URL` in `.env` or your shell environment to point to a PostgreSQL database with the `sismos` table already created. Then run:
 
 ```bash
-go mod tidy
-DATABASE_URL="postgresql://telurify:telurify@localhost:5432/backend_development?sslmode=disable" go run ./cmd/ingest
+source .env
+make run
 ```
 
-The job intentionally deduplicates by `title`, validates magnitudes in
-`-1.0..10.0`, and classifies other save errors as duplicates to preserve the
-Rails task's behavior.
+The application emits structured, colorized logs to stderr when running in a
+terminal. Colors are disabled automatically when output is redirected. The
+`DATABASE_URL` value can also be supplied directly in the shell environment.
+
+The job intentionally deduplicates by `title` and validates magnitudes in
+`-1.0..10.0`. Database lookup and insert errors are reported separately from
+actual duplicates.
+
+### Make targets
+
+```bash
+make help  # Show available commands
+make test   # Run tests
+make vet    # Run static analysis
+make check  # Format, test, and vet
+make build  # Build bin/ingest
+```
 
 ### Database permissions
 
