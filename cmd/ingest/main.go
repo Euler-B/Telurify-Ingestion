@@ -3,12 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"strings"
 
 	"github.com/Euler-B/telurify-ingestion/internal/store"
 	"github.com/Euler-B/telurify-ingestion/internal/usgs"
+	"github.com/lmittmann/tint"
 )
 
 const (
@@ -18,24 +19,33 @@ const (
 
 func main() {
 	ctx := context.Background()
+	logger := slog.New(tint.NewHandler(os.Stderr, &tint.Options{
+		Level:   slog.LevelInfo,
+		NoColor: !isTerminal(os.Stderr),
+	}))
+	slog.SetDefault(logger)
 
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
-		log.Fatal("DATABASE_URL is required")
+		logger.Error("DATABASE_URL is required")
+		os.Exit(1)
 	}
 
 	db, err := store.Connect(ctx, databaseURL)
 	if err != nil {
-		log.Fatal("database connection failed")
+		logger.Error("database connection failed", "error", err)
+		os.Exit(1)
 	}
 	defer db.Close(ctx)
 
 	feed, err := usgs.Fetch()
 	if err != nil {
-		log.Fatal("USGS feed request failed")
+		logger.Error("USGS feed request failed", "error", err)
+		os.Exit(1)
 	}
+	logger.Info("USGS feed fetched", "features", len(feed.Features))
 
-	var newRecords, duplicateRecords, invalidRecords int
+	var newRecords, duplicateRecords, invalidRecords, databaseErrors int
 	progress := newProgress(len(feed.Features))
 
 	for processed, feature := range feed.Features {
@@ -50,7 +60,8 @@ func main() {
 
 		exists, err := db.ExistsByTitle(ctx, props.Title)
 		if err != nil {
-			duplicateRecords++
+			databaseErrors++
+			logger.Error("database lookup failed", "feature", processed+1, "external_id", feature.ID, "title", props.Title, "error", err)
 			progress.update(processed+1, newRecords, duplicateRecords, invalidRecords)
 			continue
 		}
@@ -80,7 +91,8 @@ func main() {
 		}
 
 		if err := db.Insert(ctx, record); err != nil {
-			duplicateRecords++
+			databaseErrors++
+			logger.Error("database insert failed", "feature", processed+1, "external_id", feature.ID, "title", props.Title, "error", err)
 			progress.update(processed+1, newRecords, duplicateRecords, invalidRecords)
 			continue
 		}
@@ -90,10 +102,17 @@ func main() {
 	}
 	progress.finish()
 
-	log.Printf("Nuevos registros guardados: %d", newRecords)
-	log.Printf("Registros duplicados omitidos: %d", duplicateRecords)
-	log.Printf("Registros inválidos omitidos: %d", invalidRecords)
-	log.Printf("Datos de los sismos obtenido, validados, y persistidos")
+	logger.Info("ingestion completed",
+		"new_records", newRecords,
+		"duplicate_records", duplicateRecords,
+		"invalid_records", invalidRecords,
+		"database_errors", databaseErrors,
+	)
+}
+
+func isTerminal(file *os.File) bool {
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 type progressBar struct {
